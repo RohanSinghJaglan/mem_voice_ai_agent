@@ -1,4 +1,4 @@
-# 🎙️ Voice-Controlled Local AI Agent
+#  Voice-Controlled Local AI Agent
 
 A production-grade voice-controlled AI agent that transcribes spoken commands, classifies intent, and executes actions — all through a clean Gradio web interface. Built for the Mem0 internship assignment.
 
