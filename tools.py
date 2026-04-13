@@ -6,20 +6,24 @@ SAFETY: Every file write is sandboxed to the output/ directory via safe_path()
 to prevent path traversal attacks. No file is ever written outside output/.
 """
 
+import logging
 import os
 import re
+
 import google.generativeai as genai
 from config import (
-    GEMINI_API_KEY,
     GEMINI_PRO_MODEL,
     GEMINI_FLASH_MODEL,
     OUTPUT_DIR,
     MAX_CHAT_HISTORY,
+    API_TIMEOUT_SECONDS,
 )
 
+logger = logging.getLogger("voice-agent.tools")
 
-# ── Configure Google AI SDK ─────────────────────────────────────────
-genai.configure(api_key=GEMINI_API_KEY)
+# ── Cache model instances at module level for performance ────────────
+_pro_model = genai.GenerativeModel(GEMINI_PRO_MODEL)
+_flash_model = genai.GenerativeModel(GEMINI_FLASH_MODEL)
 
 # ── Chat history stored in-memory (last N turns) ────────────────────
 _chat_history: list[dict] = []
@@ -29,41 +33,53 @@ def safe_path(filename: str) -> str:
     """
     Construct a safe file path within the output/ directory.
 
-    Strips path traversal sequences (../, ..\\ , leading /) and joins
-    the sanitized filename with the OUTPUT_DIR. This is the ONLY function
-    that should be used to construct file paths for writing.
+    Uses os.path.normpath to canonicalize the path and then verifies
+    the resolved absolute path is within OUTPUT_DIR. This is the ONLY
+    function that should be used to construct file paths for writing.
 
     Args:
         filename: Raw filename from user input.
 
     Returns:
-        Absolute path within the output/ directory.
+        Absolute path guaranteed to be within the output/ directory.
+
+    Raises:
+        ValueError: If the filename cannot be safely resolved within output/.
 
     Example:
         >>> safe_path("../../etc/passwd")
-        '/project/output/etc/passwd'  # traversal stripped
+        '/project/output/passwd'  # traversal stripped, basename used
         >>> safe_path("hello.py")
         '/project/output/hello.py'
     """
-    # Strip leading slashes and path traversal
-    sanitized = filename.replace("\\", "/")
-    sanitized = re.sub(r"\.\./", "", sanitized)
-    sanitized = re.sub(r"\.\.", "", sanitized)
+    if not filename or not filename.strip():
+        return os.path.join(OUTPUT_DIR, "untitled.txt")
+
+    # Normalize separators and remove null bytes
+    sanitized = filename.replace("\\", "/").replace("\x00", "")
+
+    # Remove all path traversal patterns
+    sanitized = re.sub(r"\.\.+[/\\]?", "", sanitized)
     sanitized = sanitized.lstrip("/")
 
-    # Remove any remaining dangerous patterns
-    sanitized = sanitized.replace("\x00", "")  # null bytes
+    # Normalize the path (collapses remaining ../ if any)
+    sanitized = os.path.normpath(sanitized)
 
-    if not sanitized:
+    # After normpath, re-strip any leading .. or /
+    parts = sanitized.split(os.sep)
+    parts = [p for p in parts if p not in ("..", ".")]
+    sanitized = os.path.join(*parts) if parts else "untitled.txt"
+
+    if not sanitized or sanitized == ".":
         sanitized = "untitled.txt"
 
     full_path = os.path.join(OUTPUT_DIR, sanitized)
 
-    # Final safety check: resolved path must be within OUTPUT_DIR
+    # Final safety check: resolved path MUST be within OUTPUT_DIR
     resolved = os.path.realpath(full_path)
     output_resolved = os.path.realpath(OUTPUT_DIR)
-    if not resolved.startswith(output_resolved):
-        # If somehow still escaping, force into output root
+    if not resolved.startswith(output_resolved + os.sep) and resolved != output_resolved:
+        logger.warning("Path traversal blocked: '%s' → using basename '%s'", filename, os.path.basename(sanitized))
         full_path = os.path.join(OUTPUT_DIR, os.path.basename(sanitized))
 
     return full_path
@@ -88,7 +104,7 @@ def create_file(filename: str, content: str) -> tuple:
     try:
         filepath = safe_path(filename)
 
-        # Create subdirectories if filename includes a path
+        # Ensure output directory exists (in case it was deleted at runtime)
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
         with open(filepath, "w", encoding="utf-8") as f:
@@ -96,12 +112,14 @@ def create_file(filename: str, content: str) -> tuple:
 
         rel_path = os.path.relpath(filepath)
         size = os.path.getsize(filepath)
+        logger.info("File created: %s (%d bytes)", rel_path, size)
         return (
             f"✓ File created: {rel_path} ({size} bytes)",
             content,
         )
 
     except Exception as e:
+        logger.error("Failed to create file '%s': %s", filename, str(e))
         return (f"✗ Failed to create file '{filename}': {str(e)}", "")
 
 
@@ -132,7 +150,7 @@ def _strip_code_blocks(text: str) -> str:
 
 def write_code(filename: str, description: str, language: str) -> tuple:
     """
-    Generate code using Gemini 1.5 Pro and save it to the output/ directory.
+    Generate code using Gemini 2.5 Pro and save it to the output/ directory.
 
     Uses the Pro model (not Flash) because code generation requires deeper
     reasoning for producing quality docstrings, type hints, and error handling.
@@ -176,19 +194,24 @@ OUTPUT: Return ONLY the raw code. No markdown fences, no explanations, no preamb
 Start directly with the code (imports, shebang, or module docstring)."""
 
     try:
-        model = genai.GenerativeModel(GEMINI_PRO_MODEL)
+        logger.info("Generating %s code: '%s'", language, description[:60])
 
-        response = model.generate_content(
+        response = _pro_model.generate_content(
             code_prompt,
             generation_config=genai.types.GenerationConfig(
-                temperature=0.2,  # Low temp for deterministic, correct code
+                temperature=0.2,
                 max_output_tokens=4096,
             ),
+            request_options={"timeout": API_TIMEOUT_SECONDS},
         )
+
+        # Handle empty/blocked response
+        if not response.candidates or not response.text:
+            return ("✗ Gemini returned empty response. Try rephrasing your request.", "")
 
         code = _strip_code_blocks(response.text)
 
-        # Write to file
+        # Ensure output directory exists
         filepath = safe_path(filename)
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
@@ -197,6 +220,7 @@ Start directly with the code (imports, shebang, or module docstring)."""
 
         rel_path = os.path.relpath(filepath)
         line_count = code.count("\n") + 1
+        logger.info("Code generated: %s (%d lines)", rel_path, line_count)
         return (
             f"✓ Code generated: {rel_path} ({line_count} lines, {language})",
             code,
@@ -204,14 +228,17 @@ Start directly with the code (imports, shebang, or module docstring)."""
 
     except Exception as e:
         error_msg = str(e)
+        logger.error("Code generation failed: %s", error_msg)
         if "429" in error_msg or "quota" in error_msg.lower():
             return ("✗ Gemini API quota exceeded. Please wait and retry.", "")
+        if "timeout" in error_msg.lower():
+            return ("✗ Gemini API timed out. Try a simpler request.", "")
         return (f"✗ Code generation failed: {error_msg}", "")
 
 
 def summarize_text(content: str) -> tuple:
     """
-    Summarize text using Gemini 1.5 Flash.
+    Summarize text using Gemini 2.5 Flash.
 
     Flash is used here (not Pro) because summarization benefits from
     speed over deep reasoning, and Flash produces structured bullet
@@ -250,29 +277,37 @@ TEXT TO SUMMARIZE:
 {content}"""
 
     try:
-        model = genai.GenerativeModel(GEMINI_FLASH_MODEL)
+        logger.info("Summarizing text: %d chars", len(content))
 
-        response = model.generate_content(
+        response = _flash_model.generate_content(
             summary_prompt,
             generation_config=genai.types.GenerationConfig(
                 temperature=0.3,
                 max_output_tokens=1024,
             ),
+            request_options={"timeout": API_TIMEOUT_SECONDS},
         )
 
+        if not response.candidates or not response.text:
+            return ("✗ Gemini returned empty response. Try rephrasing.", "")
+
         summary = response.text.strip()
+        logger.info("Summarization successful")
         return ("✓ Text summarized successfully.", summary)
 
     except Exception as e:
         error_msg = str(e)
+        logger.error("Summarization failed: %s", error_msg)
         if "429" in error_msg or "quota" in error_msg.lower():
             return ("✗ Gemini API quota exceeded. Please wait and retry.", "")
+        if "timeout" in error_msg.lower():
+            return ("✗ Gemini API timed out. Try again.", "")
         return (f"✗ Summarization failed: {error_msg}", "")
 
 
 def chat_response(text: str, history: list = None) -> tuple:
     """
-    Generate a conversational response using Gemini 1.5 Flash.
+    Generate a conversational response using Gemini 2.5 Flash.
 
     Maintains the last 5 turns of conversation context for coherent
     multi-turn dialogue. History is stored in-memory and resets on
@@ -313,22 +348,22 @@ USER: {text}
 Respond naturally and helpfully."""
 
     try:
-        model = genai.GenerativeModel(GEMINI_FLASH_MODEL)
-
-        response = model.generate_content(
+        response = _flash_model.generate_content(
             chat_prompt,
             generation_config=genai.types.GenerationConfig(
-                temperature=0.7,  # Higher temp for natural conversation
+                temperature=0.7,
                 max_output_tokens=1024,
             ),
+            request_options={"timeout": API_TIMEOUT_SECONDS},
         )
+
+        if not response.candidates or not response.text:
+            return ("✗ Gemini returned empty response.", "I couldn't generate a response. Please try again.")
 
         reply = response.text.strip()
 
-        # Store in history
+        # Store in history (bounded)
         _chat_history.append({"user": text, "assistant": reply})
-
-        # Trim history to max size
         if len(_chat_history) > MAX_CHAT_HISTORY:
             _chat_history = _chat_history[-MAX_CHAT_HISTORY:]
 
@@ -336,8 +371,11 @@ Respond naturally and helpfully."""
 
     except Exception as e:
         error_msg = str(e)
+        logger.error("Chat failed: %s", error_msg)
         if "429" in error_msg or "quota" in error_msg.lower():
             return ("✗ Gemini API quota exceeded. Please wait and retry.", "")
+        if "timeout" in error_msg.lower():
+            return ("✗ Gemini API timed out. Try again.", "")
         return (f"✗ Chat failed: {error_msg}", "")
 
 
@@ -363,6 +401,8 @@ def execute_intent(intent_data: dict, original_text: str) -> tuple:
     intent = intent_data.get("intent", "chat")
     params = intent_data.get("parameters", {})
 
+    logger.info("Executing intent: %s", intent)
+
     try:
         if intent == "create_file":
             filename = params.get("filename", "untitled.txt")
@@ -383,8 +423,8 @@ def execute_intent(intent_data: dict, original_text: str) -> tuple:
             return chat_response(original_text)
 
         else:
-            # Unknown intent — fall back to chat
             return chat_response(original_text)
 
     except Exception as e:
+        logger.error("Tool execution failed: %s", str(e))
         return (f"✗ Tool execution failed: {str(e)}", "")

@@ -12,11 +12,18 @@ Usage:
 """
 
 import json
+import logging
+
 import gradio as gr
 from stt import transcribe_audio
 from intent import classify_intent
 from tools import execute_intent
 from config import GRADIO_SERVER_PORT, OUTPUT_DIR
+
+logger = logging.getLogger("voice-agent.ui")
+
+# ── Confidence threshold for low-confidence warning ─────────────────
+LOW_CONFIDENCE_THRESHOLD = 0.5
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -55,6 +62,7 @@ def process_audio(audio_path: str, human_in_loop: bool, pending_state: dict):
     try:
         transcription = transcribe_audio(audio_path)
     except Exception as e:
+        logger.error("STT exception: %s", str(e))
         transcription = f"[STT ERROR] Could not transcribe audio: {str(e)}"
 
     if transcription.startswith("[STT ERROR]"):
@@ -71,7 +79,7 @@ def process_audio(audio_path: str, human_in_loop: bool, pending_state: dict):
     try:
         intent_data = classify_intent(transcription)
     except (ValueError, Exception) as e:
-        # Graceful degradation: default to chat if classification fails
+        logger.warning("Intent classification failed, defaulting to chat: %s", str(e)[:100])
         intent_data = {
             "intent": "chat",
             "parameters": {},
@@ -79,9 +87,16 @@ def process_audio(audio_path: str, human_in_loop: bool, pending_state: dict):
             "reasoning": f"Intent classification failed ({str(e)[:100]}). Defaulting to chat.",
         }
 
+    # ── Low confidence warning ───────────────────────────────────
+    confidence = intent_data.get("confidence", 0.0)
+    confidence_warning = ""
+    if confidence < LOW_CONFIDENCE_THRESHOLD:
+        confidence_warning = f"⚠ Low confidence ({confidence:.0%}) — result may be inaccurate.\n"
+
     intent_display = (
+        f"{confidence_warning}"
         f"Intent: {intent_data['intent']}\n"
-        f"Confidence: {intent_data['confidence']:.0%}\n"
+        f"Confidence: {confidence:.0%}\n"
         f"Reasoning: {intent_data['reasoning']}\n"
         f"Parameters: {json.dumps(intent_data.get('parameters', {}), indent=2)}"
     )
@@ -91,7 +106,6 @@ def process_audio(audio_path: str, human_in_loop: bool, pending_state: dict):
     requires_confirmation = intent in ("create_file", "write_code")
 
     if human_in_loop and requires_confirmation:
-        # Store intent for later confirmation
         pending_state = {
             "intent_data": intent_data,
             "original_text": transcription,
@@ -112,10 +126,11 @@ def process_audio(audio_path: str, human_in_loop: bool, pending_state: dict):
             pending_state,
         )
 
-    # Execute immediately (no confirmation needed or checkbox unchecked)
+    # Execute immediately
     try:
         result_msg, output_content = execute_intent(intent_data, transcription)
     except Exception as e:
+        logger.error("Execution error: %s", str(e))
         result_msg = f"✗ Execution error: {str(e)}"
         output_content = ""
 
@@ -155,6 +170,7 @@ def confirm_execution(pending_state: dict):
         original_text = pending_state["original_text"]
         result_msg, output_content = execute_intent(intent_data, original_text)
     except Exception as e:
+        logger.error("Confirmed execution error: %s", str(e))
         result_msg = f"✗ Execution error: {str(e)}"
         output_content = ""
 
@@ -162,7 +178,7 @@ def confirm_execution(pending_state: dict):
         f"✓ Confirmed and executed.\n{result_msg}",
         output_content,
         gr.update(visible=False),
-        {},  # Clear pending state
+        {},
     )
 
 
@@ -198,8 +214,8 @@ def build_ui() -> gr.Blocks:
         )
         gr.Markdown(
             "**STT:** Groq Whisper Large V3 &nbsp;|&nbsp; "
-            "**Intent:** Gemini 1.5 Flash &nbsp;|&nbsp; "
-            "**Code Gen:** Gemini 1.5 Pro &nbsp;|&nbsp; "
+            "**Intent:** Gemini 2.5 Flash &nbsp;|&nbsp; "
+            "**Code Gen:** Gemini 2.5 Pro &nbsp;|&nbsp; "
             "**Sandbox:** `output/`",
             elem_classes="model-info",
         )
