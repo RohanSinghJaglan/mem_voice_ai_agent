@@ -10,7 +10,6 @@ A production-grade voice-controlled AI agent that transcribes spoken commands, c
 
 ## Architecture
 
-Excalidraw users: Go to **Insert -> Mermaid**, and paste the code below to automatically generate an editable Excalidraw diagram!
 
 ```mermaid
 flowchart LR
