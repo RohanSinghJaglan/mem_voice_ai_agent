@@ -39,18 +39,14 @@ def _require_env(var_name: str) -> str:
     return value
 
 
-# ── API Keys & Credentials ──────────────────────────────────────────
+# ── API Keys ────────────────────────────────────────────────────────
 GROQ_API_KEY: str = _require_env("GROQ_API_KEY")
-GCP_PROJECT_ID: str = _require_env("GCP_PROJECT_ID")
-GOOGLE_APPLICATION_CREDENTIALS: str = os.getenv(
-    "GOOGLE_APPLICATION_CREDENTIALS", "./service-account.json"
-)
+GEMINI_API_KEY: str = _require_env("GEMINI_API_KEY")
 
 # ── Model Configuration ─────────────────────────────────────────────
 GROQ_STT_MODEL: str = "whisper-large-v3"
-GEMINI_FLASH_MODEL: str = "gemini-1.5-flash-002"
-GEMINI_PRO_MODEL: str = "gemini-1.5-pro-002"
-VERTEX_LOCATION: str = "asia-south1"
+GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"
+GEMINI_PRO_MODEL: str = "gemini-2.5-pro"
 
 # ── Application Settings ────────────────────────────────────────────
 OUTPUT_DIR: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
@@ -60,14 +56,3 @@ GRADIO_SERVER_PORT: int = 7860
 
 # ── Ensure output directory exists ──────────────────────────────────
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# ── Validate credentials file exists ────────────────────────────────
-if not os.path.isfile(GOOGLE_APPLICATION_CREDENTIALS):
-    print(
-        f"\n[CONFIG WARNING] Service account file not found at "
-        f"'{GOOGLE_APPLICATION_CREDENTIALS}'.\n"
-        f"  → Vertex AI calls will fail unless Application Default "
-        f"Credentials (ADC) are configured.\n"
-        f"  → Run: gcloud auth application-default login\n",
-        file=sys.stderr,
-    )

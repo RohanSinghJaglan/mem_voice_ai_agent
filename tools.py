@@ -8,11 +8,9 @@ to prevent path traversal attacks. No file is ever written outside output/.
 
 import os
 import re
-import vertexai
-from vertexai.generative_models import GenerativeModel, GenerationConfig
+import google.generativeai as genai
 from config import (
-    GCP_PROJECT_ID,
-    VERTEX_LOCATION,
+    GEMINI_API_KEY,
     GEMINI_PRO_MODEL,
     GEMINI_FLASH_MODEL,
     OUTPUT_DIR,
@@ -20,8 +18,8 @@ from config import (
 )
 
 
-# ── Initialize Vertex AI ────────────────────────────────────────────
-vertexai.init(project=GCP_PROJECT_ID, location=VERTEX_LOCATION)
+# ── Configure Google AI SDK ─────────────────────────────────────────
+genai.configure(api_key=GEMINI_API_KEY)
 
 # ── Chat history stored in-memory (last N turns) ────────────────────
 _chat_history: list[dict] = []
@@ -178,11 +176,11 @@ OUTPUT: Return ONLY the raw code. No markdown fences, no explanations, no preamb
 Start directly with the code (imports, shebang, or module docstring)."""
 
     try:
-        model = GenerativeModel(GEMINI_PRO_MODEL)
+        model = genai.GenerativeModel(GEMINI_PRO_MODEL)
 
         response = model.generate_content(
             code_prompt,
-            generation_config=GenerationConfig(
+            generation_config=genai.types.GenerationConfig(
                 temperature=0.2,  # Low temp for deterministic, correct code
                 max_output_tokens=4096,
             ),
@@ -207,7 +205,7 @@ Start directly with the code (imports, shebang, or module docstring)."""
     except Exception as e:
         error_msg = str(e)
         if "429" in error_msg or "quota" in error_msg.lower():
-            return ("✗ Vertex AI quota exceeded. Please wait and retry.", "")
+            return ("✗ Gemini API quota exceeded. Please wait and retry.", "")
         return (f"✗ Code generation failed: {error_msg}", "")
 
 
@@ -252,11 +250,11 @@ TEXT TO SUMMARIZE:
 {content}"""
 
     try:
-        model = GenerativeModel(GEMINI_FLASH_MODEL)
+        model = genai.GenerativeModel(GEMINI_FLASH_MODEL)
 
         response = model.generate_content(
             summary_prompt,
-            generation_config=GenerationConfig(
+            generation_config=genai.types.GenerationConfig(
                 temperature=0.3,
                 max_output_tokens=1024,
             ),
@@ -268,7 +266,7 @@ TEXT TO SUMMARIZE:
     except Exception as e:
         error_msg = str(e)
         if "429" in error_msg or "quota" in error_msg.lower():
-            return ("✗ Vertex AI quota exceeded. Please wait and retry.", "")
+            return ("✗ Gemini API quota exceeded. Please wait and retry.", "")
         return (f"✗ Summarization failed: {error_msg}", "")
 
 
@@ -315,11 +313,11 @@ USER: {text}
 Respond naturally and helpfully."""
 
     try:
-        model = GenerativeModel(GEMINI_FLASH_MODEL)
+        model = genai.GenerativeModel(GEMINI_FLASH_MODEL)
 
         response = model.generate_content(
             chat_prompt,
-            generation_config=GenerationConfig(
+            generation_config=genai.types.GenerationConfig(
                 temperature=0.7,  # Higher temp for natural conversation
                 max_output_tokens=1024,
             ),
@@ -339,7 +337,7 @@ Respond naturally and helpfully."""
     except Exception as e:
         error_msg = str(e)
         if "429" in error_msg or "quota" in error_msg.lower():
-            return ("✗ Vertex AI quota exceeded. Please wait and retry.", "")
+            return ("✗ Gemini API quota exceeded. Please wait and retry.", "")
         return (f"✗ Chat failed: {error_msg}", "")
 
 

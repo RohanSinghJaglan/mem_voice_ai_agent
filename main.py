@@ -315,6 +315,7 @@ def build_ui() -> gr.Blocks:
 if __name__ == "__main__":
     app = build_ui()
     app.launch(
+        server_name="127.0.0.1",
         server_port=GRADIO_SERVER_PORT,
         share=False,
         show_error=True,

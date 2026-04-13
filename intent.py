@@ -1,5 +1,5 @@
 """
-Intent Classification module using Vertex AI Gemini 1.5 Flash.
+Intent Classification module using Google AI Studio Gemini 1.5 Flash.
 
 Classifies raw transcribed text into structured intents with parameters,
 confidence scores, and reasoning. Gemini Flash is chosen over Pro here
@@ -10,13 +10,12 @@ for this schema.
 
 import json
 import re
-import vertexai
-from vertexai.generative_models import GenerativeModel, GenerationConfig
-from config import GCP_PROJECT_ID, VERTEX_LOCATION, GEMINI_FLASH_MODEL
+import google.generativeai as genai
+from config import GEMINI_API_KEY, GEMINI_FLASH_MODEL
 
 
-# ── Initialize Vertex AI once at module level ───────────────────────
-vertexai.init(project=GCP_PROJECT_ID, location=VERTEX_LOCATION)
+# ── Configure Google AI SDK ─────────────────────────────────────────
+genai.configure(api_key=GEMINI_API_KEY)
 
 # ── System prompt for intent classification ──────────────────────────
 _CLASSIFICATION_PROMPT = """You are an intent classifier for a voice-controlled AI agent.
@@ -89,7 +88,7 @@ def classify_intent(text: str) -> dict:
     """
     Classify user text into a structured intent using Gemini 1.5 Flash.
 
-    Sends the transcribed text to Vertex AI Gemini Flash with a structured
+    Sends the transcribed text to Google AI Gemini Flash with a structured
     prompt, parses the JSON response, and returns a validated intent dict.
 
     Args:
@@ -121,11 +120,11 @@ def classify_intent(text: str) -> dict:
         }
 
     try:
-        model = GenerativeModel(GEMINI_FLASH_MODEL)
+        model = genai.GenerativeModel(GEMINI_FLASH_MODEL)
 
         response = model.generate_content(
             f"{_CLASSIFICATION_PROMPT}\n\nUSER COMMAND: \"{text}\"",
-            generation_config=GenerationConfig(
+            generation_config=genai.types.GenerationConfig(
                 temperature=0.1,  # Low temp for deterministic classification
                 max_output_tokens=512,
             ),
@@ -170,15 +169,15 @@ def classify_intent(text: str) -> dict:
         raise
 
     except Exception as e:
-        # Handle Vertex AI quota errors, network issues, etc.
+        # Handle quota errors, network issues, etc.
         error_msg = str(e)
         if "429" in error_msg or "quota" in error_msg.lower():
             raise ValueError(
-                f"Vertex AI quota exceeded. Wait a moment and retry.\n"
+                f"Gemini API quota exceeded. Wait a moment and retry.\n"
                 f"  Error: {error_msg}"
             )
         raise ValueError(
             f"Gemini intent classification failed.\n"
             f"  Error: {error_msg}\n"
-            f"  Check: GCP_PROJECT_ID and GOOGLE_APPLICATION_CREDENTIALS in .env"
+            f"  Check: GEMINI_API_KEY in .env"
         )
