@@ -10,23 +10,45 @@ A production-grade voice-controlled AI agent that transcribes spoken commands, c
 
 ## Architecture
 
-```
-┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐     ┌────────────┐     ┌────────────┐
-│  Mic/Upload  │────▶│  Groq Whisper     │────▶│  Gemini 1.5      │────▶│   Tools    │────▶│ Gradio UI  │
-│  (Audio)     │     │  Large V3 (STT)  │     │  Flash (Intent)  │     │ (Execute)  │     │ (Display)  │
-└──────────────┘     └──────────────────┘     └──────────────────┘     └────────────┘     └────────────┘
-                          ~0.8s                     ~0.4s                                        
-                       Groq LPU API            Vertex AI API          create_file              
-                                                                      write_code → Gemini Pro  
-                                                                      summarize → Gemini Flash 
-                                                                      chat → Gemini Flash      
+Excalidraw users: Go to **Insert -> Mermaid**, and paste the code below to automatically generate an editable Excalidraw diagram!
+
+```mermaid
+flowchart LR
+    A[Microphone / Upload] -->|.wav / .mp3| B(Groq Whisper Large V3)
+    B -->|Transcription Text| C{Gemini 2.5 Flash}
+    
+    C -->|Intent: create_file| D[File Ops Tool]
+    C -->|Intent: write_code| E[Gemini 2.5 Pro]
+    C -->|Intent: summarize| F[Gemini 2.5 Flash]
+    C -->|Intent: chat| G[Gemini 2.5 Flash]
+
+    D -->|Writes| H[(output/ sandbox)]
+    E -->|Writes| H
+    F --> I[Gradio UI]
+    G --> I
+    
+    subgraph STT Layer
+    B
+    end
+    
+    subgraph Intent Engine
+    C
+    end
+    
+    subgraph Execution Tools
+    D
+    E
+    F
+    G
+    H
+    end
 ```
 
 ### Pipeline Flow
 
 1. **Audio Input** → User records via microphone or uploads a file (.wav, .mp3, .m4a)
 2. **STT** → Groq Whisper Large V3 transcribes audio to text (<1s latency)
-3. **Intent Classification** → Gemini 1.5 Flash parses text into structured intent + parameters
+3. **Intent Classification** → Gemini 2.5 Flash parses text into structured intent + parameters
 4. **Human-in-the-Loop** → Optional confirmation step for destructive operations (file writes)
 5. **Tool Execution** → Routed to the correct tool function based on classified intent
 6. **Output** → Results displayed in the Gradio UI; files written to sandboxed `output/` directory
@@ -49,18 +71,18 @@ Running Whisper Large V3 locally is impractical for a real-time voice agent:
 
 **Verdict:** Local Whisper makes real-time voice interaction impossible on standard hardware. The Groq LPU delivers the same Whisper Large V3 model at 50-100x faster inference with zero local compute. For a voice-first UX, API latency IS the product.
 
-### Why Gemini 1.5 Flash for Intent Classification
+### Why Gemini 2.5 Flash for Intent Classification
 
 - **Latency:** ~400ms for structured JSON output — critical for responsive voice UX
-- **JSON reliability:** Flash consistently produces well-formed JSON with the right prompt engineering
-- **Cost:** Vertex AI free tier provides $300 in credits; Flash is ~10x cheaper than Pro per token
+- **JSON reliability:** Flash consistently produces well-formed JSON when configured with `response_mime_type="application/json"`
+- **Cost:** Exceptional performance-to-cost ratio, highly affordable for production operations.
 - **Accuracy:** Intent classification is a constrained task (4 categories) — Flash's reasoning is sufficient
 
-### Why Gemini 1.5 Pro for Code Generation
+### Why Gemini 2.5 Pro for Code Generation
 
 - **Deeper reasoning:** Code generation requires understanding of best practices, edge cases, type systems
 - **Quality bar:** Pro produces significantly better docstrings, error handling, and idiomatic code
-- **Latency acceptable:** Human-in-the-Loop confirmation means the user is already pausing to review — Pro's 2-4s latency is invisible in this flow
+- **Latency acceptable:** Human-in-the-Loop confirmation means the user is already pausing to review — Pro's latency is invisible in this flow
 - **When it matters:** Pro is ONLY invoked for `write_code` intent, not for every request
 
 ---
@@ -71,18 +93,17 @@ Running Whisper Large V3 locally is impractical for a real-time voice agent:
 
 - Python 3.10+
 - A [Groq API key](https://console.groq.com/keys) (free tier available)
-- A Google Cloud project with Vertex AI API enabled
-- A GCP service account JSON key (or `gcloud auth application-default login`)
+- A [Google AI Studio API Key](https://aistudio.google.com/app/apikey) (for Gemini 2.5 models)
 
 ### Step-by-step
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/RohanSinghJaglan/mem_local_ai_model.git
-cd mem_local_ai_model
+git clone https://github.com/RohanSinghJaglan/mem_voice_ai_agent.git
+cd mem_voice_ai_agent
 
 # 2. Create a virtual environment
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # 3. Install dependencies
@@ -92,23 +113,11 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your actual keys:
 #   GROQ_API_KEY=gsk_...
-#   GCP_PROJECT_ID=your-project-id
-#   GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
+#   GEMINI_API_KEY=AIza...
 
-# 5. Place your GCP service account key
-# Download from: GCP Console → IAM → Service Accounts → Keys
-# Save as service-account.json in the project root
-
-# 6. Launch the agent
+# 5. Launch the agent
 python main.py
 # → Open http://localhost:7860 in your browser
-```
-
-### Alternative: Use Application Default Credentials (no service account file)
-
-```bash
-gcloud auth application-default login
-# Then remove GOOGLE_APPLICATION_CREDENTIALS from .env
 ```
 
 ---
@@ -118,46 +127,47 @@ gcloud auth application-default login
 | Intent | Example Phrase | Action | Model Used |
 |--------|---------------|--------|------------|
 | `create_file` | "Create a text file called notes.txt with hello world" | Writes file to `output/notes.txt` | — |
-| `write_code` | "Write a Python function that reverses a string" | Generates code → `output/generated.py` | Gemini 1.5 Pro |
-| `summarize` | "Summarize: Machine learning is a subset of AI that focuses on learning from data" | Returns bullet-point summary | Gemini 1.5 Flash |
-| `chat` | "What is the difference between RAM and ROM?" | Conversational response with 5-turn memory | Gemini 1.5 Flash |
+| `write_code` | "Write a Python function that reverses a string" | Generates code → `output/generated.py` | Gemini 2.5 Pro |
+| `summarize` | "Summarize: Machine learning is a subset of AI that focuses on learning from data" | Returns bullet-point summary | Gemini 2.5 Flash |
+| `chat` | "What is the difference between RAM and ROM?" | Conversational response with 5-turn memory | Gemini 2.5 Flash |
 
 ---
 
-## Bonus Features Implemented
+## Security & Architecture Features
 
 ### 🔒 Human-in-the-Loop Confirmation
 Destructive operations (`create_file`, `write_code`) require explicit user confirmation when the checkbox is enabled. The classified intent and parameters are displayed for review before any file is written.
 
-### 🛡️ Graceful Degradation
-Every pipeline stage has independent error handling:
-- **STT fails?** → Clear error message, pipeline stops cleanly
-- **Intent classification fails?** → Falls back to `chat` intent automatically
-- **Tool execution fails?** → Returns error string, UI never crashes
-- **Quota exceeded?** → Specific message with retry guidance
+### 🛡️ Graceful Degradation & Hardening
+Every pipeline stage has independent error and security handling:
+- **Audio Overload:** Blocks large audio files (>25MB) client-side before sending to Groq.
+- **API Guardrails:** Enforced `30s` timeout across all API calls to prevent hanging UI threads.
+- **STT fails?** → Clear logging, pipeline stops cleanly.
+- **Intent classification fails?** → Handles empty responses and schema crashes by falling back to the safe `chat` intent.
+- **Validation:** Provides UI warning if classification confidence drops below 50%.
 
 ### 🔗 Compound Command Detection
 The intent classifier detects multi-action commands (e.g., "create a file and then write code in it") and sets a `compound` flag in parameters, classifying based on the primary action.
 
 ### 💬 Session Chat History
-The `chat` intent maintains the last 5 conversation turns in-memory, enabling coherent multi-turn dialogue within a session. History resets on server restart.
+The `chat` intent maintains the last 5 conversation turns in memory, scoped to MAX_CHAT_HISTORY, enabling coherent dialogue without exposing the app to memory-based denial of service.
 
-### 📁 Path Traversal Protection
-All file operations use `safe_path()` which strips `../`, null bytes, and leading slashes, then verifies the resolved path is within `output/`. No file can ever be written outside the sandbox.
+### 📁 Strict Path Traversal Protection
+All file operations pass through an aggressive `safe_path()` pipeline which normalizes separators, drops null-bytes, eliminates `../` traversals aggressively with `os.path.normpath`, and ultimately blocks writes entirely if the resulting absolute path manages to escape the trailing `/output/` sandbox.
 
 ---
 
 ## Challenges & Solutions
 
-### 1. JSON Parsing from LLM Responses
-**Challenge:** Gemini models frequently wrap JSON responses in markdown code fences (` ```json ... ``` `) despite explicit prompt instructions not to.
+### 1. Robust JSON Parsing from LLM Responses
+**Challenge:** Initially, LLMs often wrapped JSON responses in markdown code fences despite explicit instructions, and sometimes cutoff output mid-way yielding `json.JSONDecodeError`.
 
-**Solution:** Built `_strip_markdown_json()` in `intent.py` that uses regex to strip code fences before JSON parsing. This handles both ` ```json ` and bare ` ``` ` fencing patterns. The function is called on every LLM response before `json.loads()`.
+**Solution:** Switched the Gemini 2.5 generation config explicitly to `response_mime_type="application/json"`. The backend is now guaranteed to provide a rigorously validated JSON schema directly out of the generation pipeline, drastically reducing latency and failures.
 
-### 2. Vertex AI Authentication Complexity
-**Challenge:** GCP authentication has three modes (service account JSON, Application Default Credentials, workload identity) and each fails differently — sometimes silently returning empty responses.
+### 2. Transition from GCP to Google AI Studio
+**Challenge:** Using Vertex AI (`google-cloud-aiplatform`) involved opaque auth strategies (service-account keys, application-default) that were heavy and frequently threw uncaught quota failures. 
 
-**Solution:** `config.py` validates the service account file exists at startup and prints a specific warning with the `gcloud auth application-default login` fallback command. The intent and tools modules surface quota errors (`429`) separately from auth errors.
+**Solution:** Completely migrated to the `google-generativeai` lightweight SDK pointing to Google AI Studio. This unified the system around a single `GEMINI_API_KEY` simplifying setup, whilst providing access to the absolute latest (Gemini 2.5) models.
 
 ### 3. Code Block Stripping for Generated Code
 **Challenge:** When Gemini Pro generates code, it wraps the output in ` ```python ... ``` ` blocks. Writing this directly to a file creates invalid syntax with the fence markers included.
@@ -177,12 +187,12 @@ All file operations use `safe_path()` which strips `../`, null bytes, and leadin
 .
 ├── main.py              # Gradio UI and pipeline orchestration
 ├── stt.py               # Groq Whisper Large V3 transcription
-├── intent.py            # Gemini Flash intent classification
+├── intent.py            # Gemini 2.5 Flash intent classification
 ├── tools.py             # Tool execution (file ops, code gen, chat)
 ├── config.py            # Environment config and validation
 ├── output/              # Sandboxed directory for generated files
 │   └── .gitkeep
-├── requirements.txt     # Python dependencies
+├── requirements.txt     # Pinned Python dependencies
 ├── .env.example         # Environment variable template
 ├── .gitignore           # Git exclusions
 └── README.md            # This file
