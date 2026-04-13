@@ -198,7 +198,3 @@ All file operations pass through an aggressive `safe_path()` pipeline which norm
 ```
 
 ---
-
-## License
-
-MIT
