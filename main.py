@@ -209,7 +209,7 @@ def build_ui() -> gr.Blocks:
 
         # ── Header ──────────────────────────────────────────────
         gr.Markdown(
-            "# 🎙️ Voice-Controlled Local AI Agent",
+            "#  Voice-Controlled Local AI Agent",
             elem_classes="main-header",
         )
         gr.Markdown(
@@ -333,6 +333,6 @@ if __name__ == "__main__":
     app.launch(
         server_name="127.0.0.1",
         server_port=GRADIO_SERVER_PORT,
-        share=False,
+        share=True,
         show_error=True,
     )

@@ -7,6 +7,7 @@ A production-grade voice-controlled AI agent that transcribes spoken commands, c
 ## Architecture
 
 
+
 ```mermaid
 flowchart LR
     A[Microphone / Upload] -->|.wav / .mp3| B(Groq Whisper Large V3)
